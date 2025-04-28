@@ -116,13 +116,20 @@ class MultiLabelTrainer:
             print(f"\n===== Epoch {epoch+1}/{epochs} =====")
             
             # 重置迭代器，重新洗牌数据
-            train_iter.reset()
+            # PyTorch的DataLoader没有reset方法，每个epoch会自动重新开始，如果shuffle=True则会自动重新洗牌
+            # train_iter.reset()
             
             epoch_loss = 0
             epoch_samples = 0
             epoch_correct_preds = 0
             
             for i, (token_ids, label_1, label_2, seq_len, mask, token_type_ids) in enumerate(train_iter):
+                # 确保所有张量在正确的设备上
+                token_ids = token_ids.to(self.config.device)
+                label_1 = label_1.to(self.config.device)
+                mask = mask.to(self.config.device)
+                token_type_ids = token_type_ids.to(self.config.device)
+                
                 # 累加当前批次的样本数
                 batch_size = token_ids.size(0)
                 total_samples_processed += batch_size
@@ -218,6 +225,12 @@ class MultiLabelTrainer:
         
         with torch.no_grad():
             for token_ids, label_1, label_2, seq_len, mask, token_type_ids in tqdm(data_iter):
+                # 确保所有张量在正确的设备上
+                token_ids = token_ids.to(self.config.device)
+                label_1 = label_1.to(self.config.device)
+                mask = mask.to(self.config.device)
+                token_type_ids = token_type_ids.to(self.config.device)
+                
                 # 直接使用label_1作为多标签目标
                 multi_label_targets = label_1
                 
@@ -269,7 +282,10 @@ class MultiLabelConfig(Config):
 
         self.early_stop = 300
 
-        self.learning_rate = 1e-3
+        self.batch_size = 32
+        self.learning_rate = 1e-4
+        self.weight_decay = 0.01
+        self.max_epochs = 300
 
 # 主函数
 def main_multi_label():
@@ -302,9 +318,6 @@ def main_multi_label():
         print(f"Label_1 shape: {label_1.shape}")
         print(f"Label_2 shape: {label_2.shape}")
         break
-    
-    # 重置迭代器以便从头开始训练
-    train_iter.reset()
     
     # 3. 模型初始化 - 使用多标签分类模型
     model = BertMultiLabelClassifier(config).to(config.device)
