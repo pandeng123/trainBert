@@ -25,7 +25,7 @@ class Config:
         self.batch_size = 64
         self.learning_rate = 1e-4
         self.weight_decay = 0.01
-        self.max_epochs = 1
+        self.max_epochs = 60
         
         self.max_seq_len = 64
         self.print_step = 5
@@ -367,6 +367,14 @@ class Trainer:
 def main():
     # 1. 初始化配置
     config = Config()
+    
+    # 显示当前使用的设备信息
+    print(f"当前使用设备: {config.device}")
+    print(f"CUDA是否可用: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"当前CUDA设备名称: {torch.cuda.get_device_name(0)}")
+        print(f"CUDA设备数量: {torch.cuda.device_count()}")
+        print(f"当前CUDA设备索引: {torch.cuda.current_device()}")
     
     # 2. 数据处理
     processor = DataProcessor(config)
