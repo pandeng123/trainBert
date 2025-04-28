@@ -4,9 +4,11 @@ from datasets import load_dataset
 from transformers import BertTokenizer, BertModel
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import matplotlib.pyplot as plt
 import os
 import random
+import hashlib
 from torch.utils.data import Dataset, DataLoader
 
 # 配置类：存储所有配置参数
@@ -25,7 +27,7 @@ class Config:
         self.batch_size = 64
         self.learning_rate = 1e-4
         self.weight_decay = 0.01
-        self.max_epochs = 60
+        self.max_epochs = 1
         
         self.max_seq_len = 64
         self.print_step = 5
@@ -95,6 +97,13 @@ class DataProcessor:
             print(f"从在线加载模型: {config.model_name}")
             self.tokenizer = BertTokenizer.from_pretrained(config.model_name)
     
+    def calculate_dataset_hash(self, contents):
+        """计算数据集的哈希值"""
+        # 将数据集内容转换为字符串
+        content_str = str(contents)
+        # 计算SHA-256哈希值
+        return hashlib.sha256(content_str.encode()).hexdigest()
+    
     def load_dataset(self, path, pad_size=32):
         contents = []
         with open(path, 'r', encoding='UTF-8') as f:
@@ -135,6 +144,27 @@ class DataProcessor:
                 
                 # 保留原有的label_2，同时加入多标签向量
                 contents.append((token_ids, multi_labels, int(label_2), seq_len, mask, token_type_ids))
+        
+        # 计算并打印数据集哈希值
+        dataset_hash = self.calculate_dataset_hash(contents)
+        print(f"数据集哈希值: {dataset_hash}")
+        
+        # 保存哈希值到文件
+        hash_file = path + '.hash'
+        if os.path.exists(hash_file):
+            with open(hash_file, 'r') as f:
+                saved_hash = f.read().strip()
+            if saved_hash != dataset_hash:
+                print("警告：数据集哈希值不匹配！")
+                print(f"保存的哈希值: {saved_hash}")
+                print(f"当前哈希值: {dataset_hash}")
+            else:
+                print("数据集验证通过：哈希值匹配")
+        else:
+            with open(hash_file, 'w') as f:
+                f.write(dataset_hash)
+            print("已保存新的数据集哈希值")
+        
         return contents
     
     def get_dataloader(self, data, batch_size, device, shuffle=True):
@@ -214,8 +244,6 @@ class BertClassifier(nn.Module):
                 token_type_ids=token_type_ids
             )
         out = self.fc(self.hidden(out.last_hidden_state[:, 0]))
-        out = out.softmax(dim=1)
-        
         return out
 
 # 训练器类：负责模型训练和评估
@@ -225,6 +253,7 @@ class Trainer:
         self.config = config
         self.optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
         self.criterion = nn.CrossEntropyLoss()
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='max', factor=0.5, patience=5, verbose=True)
         
     def train(self, train_loader, epochs=1):
         """
@@ -269,6 +298,9 @@ class Trainer:
                 total_samples_processed += batch_size
                 epoch_samples += batch_size
                 
+                # 先清零梯度
+                self.optimizer.zero_grad()
+                
                 out = self.model(
                     input_ids=token_ids,
                     attention_mask=mask,
@@ -277,7 +309,6 @@ class Trainer:
                 loss = self.criterion(out, label_2)
                 loss.backward()
                 self.optimizer.step()
-                self.optimizer.zero_grad()
                 
                 # 计算准确率
                 pred = out.argmax(dim=1)
@@ -309,6 +340,9 @@ class Trainer:
                 best_accuracy = epoch_accuracy
                 print(f"*** 新的最佳准确率: {best_accuracy:.4f} ***")
                 
+            # 更新学习率
+            # self.scheduler.step(epoch_accuracy)
+        
         # 绘制训练指标图形
         draw(iterations, loss_values, accuracy_values)
         
