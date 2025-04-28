@@ -8,7 +8,6 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import matplotlib.pyplot as plt
 import os
 import random
-import hashlib
 from torch.utils.data import Dataset, DataLoader
 
 # 配置类：存储所有配置参数
@@ -20,17 +19,17 @@ class Config:
         self.use_local_model = True  # 使用本地模型
         self.hidden_size = 768
         self.mid_size = 512  # BERT输出层与分类层之间的隐藏层大小
-        self.dropout_rate = 0.5  # Dropout比率
+        self.dropout_rate = 0.3  # Dropout比率
         self.num_classes = 3
         
         # 训练参数
-        self.batch_size = 64
+        self.batch_size = 32
         self.learning_rate = 1e-4
         self.weight_decay = 0.01
-        self.max_epochs = 1
+        self.max_epochs = 60
         
         self.max_seq_len = 64
-        self.print_step = 5
+        self.print_step = 100
         self.early_stop = 60
         
         # 数据加载参数
@@ -41,7 +40,7 @@ class Config:
         self.test_path = "./data/test.txt"  # 添加测试数据路径
         
         # 评估参数
-        self.do_eval = False  # 是否开启测试集评估
+        self.do_eval = True  # 是否开启测试集评估
         
         # 特殊标记
         self.pad_token = '[PAD]'
@@ -97,13 +96,6 @@ class DataProcessor:
             print(f"从在线加载模型: {config.model_name}")
             self.tokenizer = BertTokenizer.from_pretrained(config.model_name)
     
-    def calculate_dataset_hash(self, contents):
-        """计算数据集的哈希值"""
-        # 将数据集内容转换为字符串
-        content_str = str(contents)
-        # 计算SHA-256哈希值
-        return hashlib.sha256(content_str.encode()).hexdigest()
-    
     def load_dataset(self, path, pad_size=32):
         contents = []
         with open(path, 'r', encoding='UTF-8') as f:
@@ -144,27 +136,6 @@ class DataProcessor:
                 
                 # 保留原有的label_2，同时加入多标签向量
                 contents.append((token_ids, multi_labels, int(label_2), seq_len, mask, token_type_ids))
-        
-        # 计算并打印数据集哈希值
-        dataset_hash = self.calculate_dataset_hash(contents)
-        print(f"数据集哈希值: {dataset_hash}")
-        
-        # 保存哈希值到文件
-        hash_file = path + '.hash'
-        if os.path.exists(hash_file):
-            with open(hash_file, 'r') as f:
-                saved_hash = f.read().strip()
-            if saved_hash != dataset_hash:
-                print("警告：数据集哈希值不匹配！")
-                print(f"保存的哈希值: {saved_hash}")
-                print(f"当前哈希值: {dataset_hash}")
-            else:
-                print("数据集验证通过：哈希值匹配")
-        else:
-            with open(hash_file, 'w') as f:
-                f.write(dataset_hash)
-            print("已保存新的数据集哈希值")
-        
         return contents
     
     def get_dataloader(self, data, batch_size, device, shuffle=True):
@@ -255,6 +226,9 @@ class Trainer:
         self.criterion = nn.CrossEntropyLoss()
         self.scheduler = ReduceLROnPlateau(self.optimizer, mode='max', factor=0.5, patience=5, verbose=True)
         
+        # 初始化模型管理器
+        from model_manager import ModelManager
+        self.model_manager = ModelManager()
     def train(self, train_loader, epochs=1):
         """
         训练模型
@@ -341,8 +315,19 @@ class Trainer:
                 print(f"*** 新的最佳准确率: {best_accuracy:.4f} ***")
                 
             # 更新学习率
-            # self.scheduler.step(epoch_accuracy)
+            #self.scheduler.step(epoch_accuracy)
         
+        # 保存当前模型
+        if self.model_manager.should_save_model(epoch_accuracy):
+            self.model_manager.save_model(
+                self.model,
+                self.optimizer,
+                self.config,
+                epoch + 1,
+                epoch_accuracy,
+                torch.zeros(len(self.config.label_list)),  # 这里使用零向量，因为训练时没有标签级别的准确率
+                is_best=(epoch_accuracy > self.model_manager.best_accuracy)
+            )
         # 绘制训练指标图形
         draw(iterations, loss_values, accuracy_values)
         

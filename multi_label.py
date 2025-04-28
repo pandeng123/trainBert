@@ -9,6 +9,30 @@ import matplotlib.pyplot as plt
 import random
 import single_label
 from single_label import Config, DataProcessor
+import argparse
+
+# 配置类需要修改标签数量
+class MultiLabelConfig(Config):
+    def __init__(self):
+        super().__init__()
+        # 修改为多标签分类
+        self.multi_label = True
+        # 阈值 - 概率超过这个值被视为正类
+        self.threshold = 0.5
+        # 评估参数
+        self.do_eval = True  # 是否开启测试集评估
+
+        self.early_stop = 300
+
+        self.num_classes = 3
+
+        self.hidden_size = 768
+        self.mid_size = 512  # BERT输出层与分类层之间的隐藏层大小
+        self.dropout_rate = 0.3  # Dropout比率
+        self.batch_size = 32
+        self.learning_rate = 1e-4
+        self.weight_decay = 0.01
+        self.max_epochs = 60
 
 # 多标签分类模型类
 class BertMultiLabelClassifier(nn.Module):
@@ -91,6 +115,9 @@ class MultiLabelTrainer:
         self.optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
         # 使用BCEWithLogitsLoss或自己实现的BCE
         self.criterion = nn.BCELoss()
+        # 初始化模型管理器
+        from model_manager import ModelManager
+        self.model_manager = ModelManager()
         
     def train(self, train_iter, epochs=1):
         """
@@ -114,10 +141,6 @@ class MultiLabelTrainer:
         # 多轮训练
         for epoch in range(epochs):
             print(f"\n===== Epoch {epoch+1}/{epochs} =====")
-            
-            # 重置迭代器，重新洗牌数据
-            # PyTorch的DataLoader没有reset方法，每个epoch会自动重新开始，如果shuffle=True则会自动重新洗牌
-            # train_iter.reset()
             
             epoch_loss = 0
             epoch_samples = 0
@@ -178,33 +201,25 @@ class MultiLabelTrainer:
                     avg_element_loss = element_losses.mean().item()
                     
                     print(f"Epoch {epoch+1}, Batch {i}, Loss: {loss.item():.4f}, Avg Element Loss: {avg_element_loss:.4f}, Accuracy: {accuracy:.4f}")
-                    
-                    # # 显示每个标签的损失和准确率
-                    # if i % (self.config.print_step * 5) == 0:  # 每5次详细打印一次每个标签的情况
-                    #     label_losses = element_losses.mean(dim=0)
-                    #     label_accs = (predictions == multi_label_targets).float().mean(dim=0)
-                        
-                    #     print("标签损失:", end=" ")
-                    #     for j, label in enumerate(self.config.label_list):
-                    #         print(f"{label}: {label_losses[j].item():.4f}", end=", ")
-                    #     print()
-                        
-                    #     print("标签准确率:", end=" ")
-                    #     for j, label in enumerate(self.config.label_list):
-                    #         print(f"{label}: {label_accs[j].item():.4f}", end=", ")
-                    #     print("\n" + "-"*50)
                 
                 global_step += 1
-                
-                # # 如果到达early_stop，则提前结束当前epoch
-                # if i >= self.config.early_stop:
-                #     print(f"到达early_stop({self.config.early_stop})，提前结束当前epoch")
-                #     break
             
             # 计算并显示当前epoch的统计信息
             epoch_accuracy = epoch_correct_preds / epoch_samples if epoch_samples > 0 else 0
             epoch_avg_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0
             print(f"Epoch {epoch+1} 完成: Loss={epoch_avg_loss:.4f}, Accuracy={epoch_accuracy:.4f}")
+            
+        # 保存当前模型
+        if self.model_manager.should_save_model(epoch_accuracy):
+            self.model_manager.save_model(
+                self.model,
+                self.optimizer,
+                self.config,
+                epoch + 1,
+                epoch_accuracy,
+                torch.zeros(len(self.config.label_list)),  # 这里使用零向量，因为训练时没有标签级别的准确率
+                is_best=(epoch_accuracy > self.model_manager.best_accuracy)
+            )
         
         # 绘制训练指标图形
         draw(iterations, loss_values, accuracy_values)
@@ -269,26 +284,9 @@ class MultiLabelTrainer:
         
         return total_loss / len(data_iter), mean_accuracy, label_accuracy
 
-# 配置类需要修改标签数量
-class MultiLabelConfig(Config):
-    def __init__(self):
-        super().__init__()
-        # 修改为多标签分类
-        self.multi_label = True
-        # 阈值 - 概率超过这个值被视为正类
-        self.threshold = 0.5
-        # 评估参数
-        self.do_eval = True  # 是否开启测试集评估
-
-        self.early_stop = 300
-
-        self.batch_size = 32
-        self.learning_rate = 1e-4
-        self.weight_decay = 0.01
-        self.max_epochs = 300
 
 # 主函数
-def main_multi_label():
+def main_multi_label(load_model_path=None):
     # 1. 初始化配置
     config = MultiLabelConfig()
     
@@ -324,12 +322,19 @@ def main_multi_label():
     
     # 4. 训练模型 - 使用多标签训练器
     trainer = MultiLabelTrainer(model, config)
+    
+    # 如果提供了模型路径，则加载模型
+    if load_model_path:
+        print(f"\n正在加载模型: {load_model_path}")
+        trainer.model_manager.load_model(model, trainer.optimizer, load_model_path)
+    
+    # 5. 训练模型
     avg_loss, actual_samples_processed = trainer.train(
         train_iter=train_iter, 
         epochs=config.max_epochs
     )
     
-    # 5. 评估模型(如果启用)
+    # 6. 评估模型(如果启用)
     if config.do_eval and test_iter is not None:
         print("\n======== 开始测试集评估 ========")
         loss, accuracy, label_accuracy = trainer.evaluate(test_iter)
@@ -343,4 +348,8 @@ def main_multi_label():
         print("未进行测试集评估")
 
 if __name__ == "__main__":
-    main_multi_label()
+    parser = argparse.ArgumentParser(description='多标签分类模型训练和评估')
+    parser.add_argument('--load', type=str, help='要加载的模型路径')
+    args = parser.parse_args()
+    
+    main_multi_label(load_model_path=args.load)
