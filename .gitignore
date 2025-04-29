@@ -34,3 +34,5 @@ ENV/
 .idea/
 .vscode/
 .ipynb_checkpoints/
+saved_models/
+

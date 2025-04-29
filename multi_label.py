@@ -15,6 +15,8 @@ import argparse
 class MultiLabelConfig(Config):
     def __init__(self):
         super().__init__()
+        self.label_list = ['动力', '价格', '内饰', '配置', '安全性', '外观', '操控', '油耗', '空间', '舒适性']
+        
         # 修改为多标签分类
         self.multi_label = True
         # 阈值 - 概率超过这个值被视为正类

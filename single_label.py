@@ -46,11 +46,12 @@ class Config:
         # 特殊标记
         self.pad_token = '[PAD]'
         self.cls_token = '[CLS]'
-        
+         
         # 标签列表
-        self.label_list = ['动力', '价格', '内饰', '配置', '安全性', '外观', '操控', '油耗', '空间', '舒适性']
-        self.label2idx = {label: idx for idx, label in enumerate(self.label_list)}
-        self.idx2label = {idx: label for idx, label in enumerate(self.label_list)}
+        self.multi_label_list = ['动力', '价格', '内饰', '配置', '安全性', '外观', '操控', '油耗', '空间', '舒适性']
+        self.single_label_list = ['负面', '正面', '中性']  # 修改为情感分类的标签
+        self.label2idx = {label: idx for idx, label in enumerate(self.multi_label_list)}
+        self.idx2label = {idx: label for idx, label in enumerate(self.multi_label_list)}
         
         # 设备设置
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -110,7 +111,7 @@ class DataProcessor:
                 label_2 = 0
                 
                 # 创建多标签向量，初始全为0
-                multi_labels = [0] * len(self.config.label_list)
+                multi_labels = [0] * len(self.config.multi_label_list)
                 
                 # 遍历每个标签部分
                 for label_part in parts[1:]:
@@ -334,7 +335,7 @@ class Trainer:
                 self.config,
                 epoch + 1,
                 epoch_accuracy,
-                torch.zeros(len(self.config.label_list)),  # 这里使用零向量，因为训练时没有标签级别的准确率
+                torch.zeros(len(self.config.single_label_list)),  # 这里使用零向量，因为训练时没有标签级别的准确率
                 is_best=(epoch_accuracy > self.model_manager.best_accuracy)
             )
         # 绘制训练指标图形
@@ -383,7 +384,7 @@ class Trainer:
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(label_2.cpu().numpy())
 
-        report = metrics.classification_report(true_label, pred_label,target_names=self.config.label_list, output_dict=True)
+        report = metrics.classification_report(true_label, pred_label,target_names=self.config.single_label_list, output_dict=True)
         print(report)
         # 计算总体准确率
         accuracy = total_correct / total_samples
