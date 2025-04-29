@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 import os
 import random
 from torch.utils.data import Dataset, DataLoader
-
+from sklearn.metrics import classification_report
+import sklearn.metrics as metrics
 # 配置类：存储所有配置参数
 class Config:
     def __init__(self):
@@ -26,7 +27,7 @@ class Config:
         self.batch_size = 32
         self.learning_rate = 1e-4
         self.weight_decay = 0.01
-        self.max_epochs = 60
+        self.max_epochs = 1
         
         self.max_seq_len = 64
         self.print_step = 100
@@ -72,8 +73,8 @@ class BertDataset(Dataset):
         multi_labels = torch.FloatTensor(item[1])
         
         # 标签映射：-1 -> 2, 0 -> 0, 1 -> 1
-        label_map = {-1: 2, 0: 0, 1: 1}
-        label_2 = torch.LongTensor([label_map[item[2]]])
+        # label_map = {-1: 2, 0: 0, 1: 1}
+        label_2 = torch.LongTensor([item[2]])
         
         seq_len = torch.LongTensor([item[3]])
         mask = torch.LongTensor(item[4])
@@ -106,18 +107,26 @@ class DataProcessor:
                 content = parts[0]
                 
                 # 获取情感标签 (label_2)
-                _, label_2 = parts[1].split('#')
+                label_2 = 0
                 
                 # 创建多标签向量，初始全为0
                 multi_labels = [0] * len(self.config.label_list)
                 
                 # 遍历每个标签部分
                 for label_part in parts[1:]:
-                    label, _ = label_part.split('#')
+                    label1, label2 = label_part.split('#')
+
+                    label_2 += int(label2)
                     # 获取标签索引并置为1（表示存在该标签）
-                    label_idx = self.config.label2idx[label]
+                    label_idx = self.config.label2idx[label1]
                     multi_labels[label_idx] = 1
                 
+                if label_2 > 0 :
+                    label_2 = 1 # 1表示正面
+                elif label_2 < 0:
+                    label_2 = 0 # 0表示负面
+                else:
+                    label_2 = 2 # 2表示中性
                 # 其他处理保持不变
                 token = self.tokenizer.tokenize(content)
                 token = [self.config.cls_token] + token
@@ -345,7 +354,8 @@ class Trainer:
         total_samples = 0
         all_preds = []
         all_labels = []
-        
+        true_label = []
+        pred_label = []
         with torch.no_grad():
             for token_ids, label_1, label_2, seq_len, mask, token_type_ids in tqdm(test_loader):
                 # 将数据移至设备（GPU/CPU）
@@ -362,7 +372,8 @@ class Trainer:
                 
                 # 获取预测结果
                 preds = out.argmax(dim=1)
-                
+                true_label += label_2.cpu().numpy().tolist()
+                pred_label += preds.cpu().numpy().tolist()
                 # 统计正确预测数
                 correct = (preds == label_2).sum().item()
                 total_correct += correct
@@ -371,7 +382,9 @@ class Trainer:
                 # 收集所有预测和标签，用于计算其他指标
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(label_2.cpu().numpy())
-        
+
+        report = metrics.classification_report(true_label, pred_label,target_names=self.config.label_list, output_dict=True)
+        print(report)
         # 计算总体准确率
         accuracy = total_correct / total_samples
         
